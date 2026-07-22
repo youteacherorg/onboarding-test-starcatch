@@ -1,0 +1,30 @@
+{
+  "name": "Star Catch",
+  "store": {
+    "tagline": "Slide your basket, catch the falling stars, and dodge the bombs as the sky speeds up.",
+    "price": 0,
+    "category": "Arcade",
+    "tags": ["arcade", "reflex", "casual", "high-score"],
+    "how_it_plays": "Golden stars and red bombs rain from the top of the screen. Slide your basket left and right to scoop up every star — each one is a point — while dodging the bombs. You start with three hearts and lose one for every bomb you catch. The longer you survive, the faster and busier the sky gets. Beat your local best score.",
+    "works_for": ["Any browser", "Windows & Mac", "100% offline"],
+    "features": [
+      { "title": "One-thumb arcade", "body": "Play with arrow keys, A/D, the mouse, or a touch drag — pick whatever feels best." },
+      { "title": "Rising difficulty", "body": "Stars fall faster and bombs grow more common the longer you last, so every run gets tenser." },
+      { "title": "Chase your best", "body": "Your top score is saved locally and shown in the HUD — there is always one more point to beat." },
+      { "title": "Instant to pick up", "body": "No tutorial, no menus to learn: catch stars, dodge bombs, keep your three hearts alive." }
+    ],
+    "includes": [
+      "Windows installer (.exe)",
+      "Mac installer (.dmg)",
+      "YouTeacher Activator — one app licenses every game on your USB",
+      "Local high-score tracking"
+    ],
+    "setup": [
+      { "title": "Install & activate", "body": "Run the installer and license it with your YouTeacher USB via the Activator." },
+      { "title": "Press Play", "body": "Launch Star Catch and hit Play — you are straight into the action." },
+      { "title": "Catch stars, dodge bombs", "body": "Move your basket to scoop stars and avoid bombs; protect your three hearts." },
+      { "title": "Beat your best", "body": "Survive as long as you can and push your local high score higher each run." }
+    ],
+    "gallery": ["frontend/icon.png"]
+  }
+}

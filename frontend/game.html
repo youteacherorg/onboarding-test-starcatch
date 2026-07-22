@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Star Catch</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%; overflow: hidden;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #0b1026; color: #fff;
+      -webkit-user-select: none; user-select: none; touch-action: none;
+    }
+    #wrap { position: fixed; inset: 0; display: grid; place-items: center; }
+    #stage {
+      position: relative;
+      width: min(100vw, 56.25vh);   /* keep a 9:16-ish portrait play area */
+      height: min(100vh, 177.78vw);
+      max-width: 480px; max-height: 800px;
+      box-shadow: 0 0 80px rgba(88,101,242,.35);
+    }
+    canvas { display: block; width: 100%; height: 100%; border-radius: 14px; background: #0b1026; }
+
+    /* HUD */
+    #hud {
+      position: absolute; top: 0; left: 0; right: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; font-weight: 700; font-size: 15px;
+      pointer-events: none; text-shadow: 0 1px 4px rgba(0,0,0,.6);
+    }
+    #hud .lives { letter-spacing: 2px; }
+    #hud .best { opacity: .8; font-weight: 600; font-size: 13px; }
+    #score { font-size: 20px; }
+
+    /* Overlays */
+    .overlay {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px; text-align: center;
+      padding: 24px; background: rgba(11,16,38,.82); backdrop-filter: blur(3px);
+      border-radius: 14px;
+    }
+    .overlay.hidden { display: none; }
+    .overlay h1 { margin: 0; font-size: 40px; letter-spacing: 1px;
+      background: linear-gradient(90deg,#ffd76a,#ffb020); -webkit-background-clip: text;
+      background-clip: text; color: transparent; }
+    .overlay h2 { margin: 0; font-size: 26px; }
+    .overlay p { margin: 2px 0; opacity: .85; font-size: 14px; line-height: 1.5; }
+    .overlay .big { font-size: 34px; font-weight: 800; color: #ffd76a; }
+    button {
+      margin-top: 6px; font-size: 16px; font-weight: 700; padding: 12px 28px;
+      border: 0; border-radius: 12px; cursor: pointer;
+      background: linear-gradient(180deg,#ffd76a,#ffb020); color: #241a00;
+      box-shadow: 0 6px 18px rgba(255,176,32,.35);
+    }
+    button:active { transform: translateY(1px); }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="stage">
+      <canvas id="c"></canvas>
+      <div id="hud">
+        <div class="lives" id="lives">❤❤❤</div>
+        <div id="score">0</div>
+        <div class="best" id="best">Best 0</div>
+      </div>
+
+      <div class="overlay" id="startScreen">
+        <h1>★ Star Catch</h1>
+        <p>Catch the golden stars.<br/>Dodge the red bombs.</p>
+        <p style="opacity:.7">Move: ← → &nbsp;·&nbsp; A / D &nbsp;·&nbsp; mouse &nbsp;·&nbsp; touch</p>
+        <button id="startBtn">Play</button>
+      </div>
+
+      <div class="overlay hidden" id="overScreen">
+        <h2>Game Over</h2>
+        <p>Score</p>
+        <div class="big" id="finalScore">0</div>
+        <p id="bestLine">Best 0</p>
+        <button id="againBtn">Play again</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    // ---- Local best score (survives across sessions) ----
+    var BEST_KEY = "starcatch.best";
+    function loadBest() {
+      try { return parseInt(localStorage.getItem(BEST_KEY) || "0", 10) || 0; }
+      catch (e) { return 0; }
+    }
+    function saveBest(v) {
+      try { localStorage.setItem(BEST_KEY, String(v)); } catch (e) {}
+    }
+    var best = loadBest();
+
+    var canvas = document.getElementById("c");
+    var ctx = canvas.getContext("2d");
+    var stage = document.getElementById("stage");
+
+    // Logical coordinate space; we scale the backing store to device pixels.
+    var W = 0, H = 0, DPR = 1;
+    function resize() {
+      var r = stage.getBoundingClientRect();
+      W = r.width; H = r.height;
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(W * DPR);
+      canvas.height = Math.round(H * DPR);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      basket.y = H - 64;
+      clampBasket();
+    }
+
+    // ---- Game state ----
+    var STATE = { MENU: 0, PLAY: 1, OVER: 2 };
+    var state = STATE.MENU;
+
+    var basket = { x: 0, y: 0, w: 84, h: 20, speed: 520 };
+    var items = [];        // {x,y,r,vy,type:'star'|'bomb',spin}
+    var stars = [];        // background twinkles
+    var score = 0, lives = 3;
+    var elapsed = 0;       // seconds survived this run
+    var spawnTimer = 0;
+    var keys = { left: false, right: false };
+    var pointerX = null;   // when dragging / mouse control
+
+    // Difficulty curves with time survived.
+    function fallSpeed() { return 150 + elapsed * 14; }          // px/s
+    function spawnInterval() { return Math.max(0.35, 0.95 - elapsed * 0.02); } // s
+    function bombChance() { return Math.min(0.42, 0.16 + elapsed * 0.006); }
+
+    function makeStars() {
+      stars = [];
+      for (var i = 0; i < 60; i++) {
+        stars.push({ x: Math.random(), y: Math.random(),
+                     s: Math.random() * 1.6 + 0.4, tw: Math.random() * Math.PI * 2 });
+      }
+    }
+    makeStars();
+
+    function reset() {
+      score = 0; lives = 3; elapsed = 0; spawnTimer = 0;
+      items = [];
+      basket.x = W / 2;
+      basket.y = H - 64;
+      updateHud();
+    }
+
+    function clampBasket() {
+      var half = basket.w / 2;
+      if (basket.x < half) basket.x = half;
+      if (basket.x > W - half) basket.x = W - half;
+    }
+
+    function spawn() {
+      var isBomb = Math.random() < bombChance();
+      var r = 16;
+      items.push({
+        x: r + Math.random() * (W - 2 * r),
+        y: -r,
+        r: r,
+        vy: fallSpeed() * (0.85 + Math.random() * 0.4),
+        type: isBomb ? "bomb" : "star",
+        spin: Math.random() * Math.PI * 2
+      });
+    }
+
+    // ---- HUD ----
+    var elLives = document.getElementById("lives");
+    var elScore = document.getElementById("score");
+    var elBest = document.getElementById("best");
+    function updateHud() {
+      elLives.textContent = "❤❤❤".slice(0, Math.max(0, lives)) || "";
+      elScore.textContent = String(score);
+      elBest.textContent = "Best " + best;
+    }
+
+    // ---- Screens ----
+    var startScreen = document.getElementById("startScreen");
+    var overScreen = document.getElementById("overScreen");
+    var finalScore = document.getElementById("finalScore");
+    var bestLine = document.getElementById("bestLine");
+
+    function startGame() {
+      reset();
+      startScreen.classList.add("hidden");
+      overScreen.classList.add("hidden");
+      state = STATE.PLAY;
+      last = performance.now();
+    }
+    function gameOver() {
+      state = STATE.OVER;
+      if (score > best) { best = score; saveBest(best); }
+      finalScore.textContent = String(score);
+      bestLine.textContent = "Best " + best;
+      updateHud();
+      overScreen.classList.remove("hidden");
+    }
+
+    document.getElementById("startBtn").addEventListener("click", startGame);
+    document.getElementById("againBtn").addEventListener("click", startGame);
+
+    // ---- Input: keyboard ----
+    window.addEventListener("keydown", function (e) {
+      var k = e.key.toLowerCase();
+      if (k === "arrowleft" || k === "a") { keys.left = true; pointerX = null; }
+      else if (k === "arrowright" || k === "d") { keys.right = true; pointerX = null; }
+      else if (k === " " || k === "enter") {
+        if (state !== STATE.PLAY) startGame();
+      }
+      if (k === "arrowleft" || k === "arrowright") e.preventDefault();
+    });
+    window.addEventListener("keyup", function (e) {
+      var k = e.key.toLowerCase();
+      if (k === "arrowleft" || k === "a") keys.left = false;
+      else if (k === "arrowright" || k === "d") keys.right = false;
+    });
+
+    // ---- Input: mouse + touch (drag/point to move) ----
+    function localX(clientX) {
+      var r = canvas.getBoundingClientRect();
+      return (clientX - r.left) * (W / r.width);
+    }
+    var dragging = false;
+    canvas.addEventListener("mousedown", function (e) { dragging = true; pointerX = localX(e.clientX); });
+    window.addEventListener("mousemove", function (e) { if (dragging) pointerX = localX(e.clientX); });
+    window.addEventListener("mouseup", function () { dragging = false; });
+    canvas.addEventListener("mousemove", function (e) {
+      // hover-follow when not using keys, feels responsive with a mouse
+      if (!keys.left && !keys.right && e.buttons === 0) pointerX = localX(e.clientX);
+    });
+    canvas.addEventListener("touchstart", function (e) {
+      if (e.touches.length) { pointerX = localX(e.touches[0].clientX); keys.left = keys.right = false; }
+      e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener("touchmove", function (e) {
+      if (e.touches.length) pointerX = localX(e.touches[0].clientX);
+      e.preventDefault();
+    }, { passive: false });
+
+    // ---- Update ----
+    function update(dt) {
+      if (state !== STATE.PLAY) return;
+      elapsed += dt;
+
+      // Move basket
+      if (pointerX !== null) {
+        var diff = pointerX - basket.x;
+        var step = basket.speed * 2.2 * dt;
+        if (Math.abs(diff) <= step) basket.x = pointerX;
+        else basket.x += Math.sign(diff) * step;
+      } else {
+        if (keys.left) basket.x -= basket.speed * dt;
+        if (keys.right) basket.x += basket.speed * dt;
+      }
+      clampBasket();
+
+      // Spawn
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) { spawn(); spawnTimer = spawnInterval(); }
+
+      // Move + collide
+      var top = basket.y - basket.h / 2 - 6;
+      var half = basket.w / 2;
+      for (var i = items.length - 1; i >= 0; i--) {
+        var it = items[i];
+        it.y += it.vy * dt;
+        it.spin += dt * 4;
+
+        var caught = it.y + it.r >= top &&
+                     it.y - it.r <= basket.y + basket.h / 2 &&
+                     it.x >= basket.x - half - it.r * 0.4 &&
+                     it.x <= basket.x + half + it.r * 0.4;
+
+        if (caught) {
+          if (it.type === "star") {
+            score += 1;
+            if (score > best) { best = score; }  // live best in HUD
+          } else {
+            lives -= 1;
+          }
+          items.splice(i, 1);
+          updateHud();
+          if (lives <= 0) { gameOver(); return; }
+          continue;
+        }
+        if (it.y - it.r > H) {
+          items.splice(i, 1); // missed star: no penalty, just gone
+        }
+      }
+    }
+
+    // ---- Render ----
+    function drawStarShape(x, y, r, spin) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(spin * 0.3);
+      ctx.beginPath();
+      for (var i = 0; i < 10; i++) {
+        var ang = Math.PI / 5 * i - Math.PI / 2;
+        var rad = (i % 2 === 0) ? r : r * 0.45;
+        ctx.lineTo(Math.cos(ang) * rad, Math.sin(ang) * rad);
+      }
+      ctx.closePath();
+      ctx.restore();
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, W, H);
+
+      // background gradient
+      var g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, "#141b3d");
+      g.addColorStop(1, "#0b1026");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      // twinkling backdrop
+      var t = performance.now() / 1000;
+      for (var i = 0; i < stars.length; i++) {
+        var s = stars[i];
+        var a = 0.35 + 0.35 * Math.sin(t * 2 + s.tw);
+        ctx.globalAlpha = a;
+        ctx.fillStyle = "#cdd6ff";
+        ctx.fillRect(s.x * W, s.y * H, s.s, s.s);
+      }
+      ctx.globalAlpha = 1;
+
+      // falling items
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j];
+        if (it.type === "star") {
+          ctx.shadowColor = "rgba(255,199,60,.9)";
+          ctx.shadowBlur = 16;
+          drawStarShape(it.x, it.y, it.r, it.spin);
+          ctx.fillStyle = "#ffd15c";
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        } else {
+          // bomb
+          ctx.beginPath();
+          ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+          ctx.fillStyle = "#e23b3b";
+          ctx.shadowColor = "rgba(226,59,59,.8)";
+          ctx.shadowBlur = 14;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          // fuse
+          ctx.strokeStyle = "#ffb84d";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(it.x, it.y - it.r);
+          ctx.quadraticCurveTo(it.x + 8, it.y - it.r - 10, it.x + 4, it.y - it.r - 16);
+          ctx.stroke();
+          // shine
+          ctx.fillStyle = "rgba(255,255,255,.35)";
+          ctx.beginPath();
+          ctx.arc(it.x - it.r * 0.35, it.y - it.r * 0.35, it.r * 0.28, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // basket
+      if (state !== STATE.MENU) {
+        var bx = basket.x - basket.w / 2, by = basket.y - basket.h / 2;
+        var bg = ctx.createLinearGradient(0, by, 0, by + basket.h);
+        bg.addColorStop(0, "#8b5a2b");
+        bg.addColorStop(1, "#6b3f18");
+        ctx.fillStyle = bg;
+        ctx.beginPath();
+        // trapezoid basket
+        ctx.moveTo(bx - 6, by);
+        ctx.lineTo(bx + basket.w + 6, by);
+        ctx.lineTo(bx + basket.w - 4, by + basket.h);
+        ctx.lineTo(bx + 4, by + basket.h);
+        ctx.closePath();
+        ctx.fill();
+        // rim
+        ctx.fillStyle = "#a9763c";
+        ctx.fillRect(bx - 6, by - 5, basket.w + 12, 6);
+        // weave lines
+        ctx.strokeStyle = "rgba(0,0,0,.18)";
+        ctx.lineWidth = 2;
+        for (var k = 1; k < 5; k++) {
+          var lx = bx + (basket.w / 5) * k;
+          ctx.beginPath();
+          ctx.moveTo(lx, by);
+          ctx.lineTo(lx - 2, by + basket.h);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // ---- Loop ----
+    var last = performance.now();
+    function frame(now) {
+      var dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      update(dt);
+      render();
+      requestAnimationFrame(frame);
+    }
+
+    window.addEventListener("resize", resize);
+    resize();
+    updateHud();
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>
