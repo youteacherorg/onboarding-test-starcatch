@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Star Catch</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 50% 0%, #1b2450, #070a18 70%);
+      color: #eef1ff; overflow: hidden;
+      user-select: none; -webkit-user-select: none;
+    }
+    #wrap { position: fixed; inset: 0; display: grid; place-items: center; }
+    #stage {
+      position: relative;
+      width: min(96vw, 520px);
+      height: min(88vh, 720px);
+      background: linear-gradient(180deg, rgba(20,28,64,.65), rgba(8,11,26,.65));
+      border: 1px solid rgba(120,140,255,.28);
+      border-radius: 18px;
+      box-shadow: 0 24px 70px rgba(0,0,0,.55), inset 0 0 60px rgba(80,110,255,.08);
+      overflow: hidden;
+    }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    .hud {
+      position: absolute; top: 0; left: 0; right: 0;
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 16px; font-weight: 700; font-size: 15px;
+      letter-spacing: .3px; pointer-events: none;
+      text-shadow: 0 1px 6px rgba(0,0,0,.6);
+    }
+    .hud .lives { color: #ff7a9c; }
+    .overlay {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      background: rgba(6,9,22,.72); backdrop-filter: blur(3px);
+      text-align: center; padding: 24px;
+    }
+    .overlay.hidden { display: none; }
+    .panel { max-width: 340px; }
+    h1 { font-size: 2.3rem; margin: 0 0 .3rem; letter-spacing: .5px; }
+    .sub { opacity: .8; margin: .2rem 0 1.2rem; line-height: 1.45; font-size: .95rem; }
+    button {
+      font: inherit; font-weight: 700; font-size: 1rem;
+      padding: .8rem 1.7rem; border: 0; border-radius: 12px; cursor: pointer;
+      background: linear-gradient(180deg, #7c8bff, #5560ff); color: #fff;
+      box-shadow: 0 8px 24px rgba(85,96,255,.45);
+      transition: transform .08s ease;
+    }
+    button:active { transform: translateY(1px) scale(.98); }
+    .hint { margin-top: 1rem; font-size: .82rem; opacity: .6; }
+    .big { font-size: 3rem; margin: .2rem 0; color: #ffd76a; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="stage">
+      <canvas id="c"></canvas>
+      <div class="hud">
+        <span>Score <b id="score">0</b></span>
+        <span>Best <b id="best">0</b></span>
+        <span class="lives" id="lives">♥ ♥ ♥</span>
+      </div>
+
+      <div class="overlay" id="startOverlay">
+        <div class="panel">
+          <h1>★ Star Catch</h1>
+          <p class="sub">Catch the falling <b>stars</b> with your basket.
+             Dodge the red <b>bombs</b> — they cost a life. The night keeps getting faster.</p>
+          <button id="startBtn">Play</button>
+          <p class="hint">Move: ← → arrows, A / D, or drag / mouse</p>
+        </div>
+      </div>
+
+      <div class="overlay hidden" id="overOverlay">
+        <div class="panel">
+          <h1>Game Over</h1>
+          <p class="sub">You caught</p>
+          <div class="big" id="finalScore">0</div>
+          <button id="againBtn">Play again</button>
+          <p class="hint" id="newBest" style="display:none">New best score!</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    const cv = document.getElementById('c');
+    const ctx = cv.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const bestEl  = document.getElementById('best');
+    const livesEl = document.getElementById('lives');
+    const startOverlay = document.getElementById('startOverlay');
+    const overOverlay  = document.getElementById('overOverlay');
+    const finalScoreEl = document.getElementById('finalScore');
+    const newBestEl    = document.getElementById('newBest');
+
+    let W = 0, H = 0, DPR = 1;
+    function resize() {
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      const r = cv.getBoundingClientRect();
+      W = r.width; H = r.height;
+      cv.width = Math.round(W * DPR);
+      cv.height = Math.round(H * DPR);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+    window.addEventListener('resize', resize);
+
+    const BEST_KEY = 'starcatch.best';
+    let best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0;
+    bestEl.textContent = best;
+
+    let running = false, score = 0, lives = 3;
+    let basket = null, items = [], stars = [], spawnTimer, speed, elapsed, last;
+
+    function reset() {
+      score = 0; lives = 3; elapsed = 0; speed = 1;
+      spawnTimer = 0;
+      basket = { x: W / 2, y: H - 46, w: 92, h: 16, tx: W / 2 };
+      items = [];
+      stars = Array.from({ length: 60 }, () => ({
+        x: Math.random() * W, y: Math.random() * H,
+        r: Math.random() * 1.4 + 0.3, tw: Math.random() * Math.PI * 2
+      }));
+      updateHud();
+    }
+
+    function updateHud() {
+      scoreEl.textContent = score;
+      livesEl.textContent = lives > 0 ? '♥ '.repeat(lives).trim() : '—';
+    }
+
+    function spawn() {
+      const isBomb = Math.random() < Math.min(0.13 + elapsed / 90000, 0.32);
+      const size = isBomb ? 16 : 13;
+      items.push({
+        x: size + Math.random() * (W - size * 2),
+        y: -size,
+        r: size,
+        vy: (95 + Math.random() * 55) * speed,
+        vx: (Math.random() - 0.5) * 40,
+        spin: Math.random() * Math.PI * 2,
+        bomb: isBomb
+      });
+    }
+
+    function start() {
+      resize();
+      reset();
+      running = true;
+      startOverlay.classList.add('hidden');
+      overOverlay.classList.add('hidden');
+      last = performance.now();
+      requestAnimationFrame(loop);
+    }
+
+    function gameOver() {
+      running = false;
+      finalScoreEl.textContent = score + (score === 1 ? ' star' : ' stars');
+      const isNew = score > best;
+      if (isNew) { best = score; localStorage.setItem(BEST_KEY, String(best)); bestEl.textContent = best; }
+      newBestEl.style.display = isNew && score > 0 ? 'block' : 'none';
+      overOverlay.classList.remove('hidden');
+    }
+
+    // ---- input ----
+    const keys = { left: false, right: false };
+    window.addEventListener('keydown', e => {
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+      if ((e.key === ' ' || e.key === 'Enter') && !running) start();
+    });
+    window.addEventListener('keyup', e => {
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+    });
+    function pointerX(e) {
+      const r = cv.getBoundingClientRect();
+      const cx = (e.touches ? e.touches[0].clientX : e.clientX);
+      return cx - r.left;
+    }
+    let dragging = false;
+    cv.addEventListener('pointerdown', e => { dragging = true; if (basket) basket.tx = pointerX(e); });
+    cv.addEventListener('pointermove', e => { if (dragging && basket) basket.tx = pointerX(e); });
+    window.addEventListener('pointerup', () => { dragging = false; });
+
+    function loop(now) {
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      if (running) { update(dt); }
+      render();
+      if (running) requestAnimationFrame(loop);
+    }
+
+    function update(dt) {
+      elapsed += dt * 1000;
+      speed = 1 + elapsed / 45000;          // gradual ramp
+      // basket movement
+      const kbSpeed = 520;
+      if (keys.left)  basket.tx -= kbSpeed * dt;
+      if (keys.right) basket.tx += kbSpeed * dt;
+      basket.tx = Math.max(basket.w / 2, Math.min(W - basket.w / 2, basket.tx));
+      basket.x += (basket.tx - basket.x) * Math.min(1, dt * 16);
+
+      // spawning
+      spawnTimer -= dt * 1000;
+      const interval = Math.max(360, 900 - elapsed / 40);
+      if (spawnTimer <= 0) { spawn(); spawnTimer = interval; }
+
+      // items
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i];
+        it.y += it.vy * dt;
+        it.x += it.vx * dt;
+        it.spin += dt * 4;
+        if (it.x < it.r) { it.x = it.r; it.vx = Math.abs(it.vx); }
+        if (it.x > W - it.r) { it.x = W - it.r; it.vx = -Math.abs(it.vx); }
+
+        const caught = it.y + it.r >= basket.y - basket.h / 2 &&
+                       it.y - it.r <= basket.y + basket.h / 2 &&
+                       it.x >= basket.x - basket.w / 2 &&
+                       it.x <= basket.x + basket.w / 2;
+        if (caught) {
+          items.splice(i, 1);
+          if (it.bomb) { lives--; flash = 1; if (lives <= 0) { updateHud(); gameOver(); return; } }
+          else { score++; pop.push({ x: it.x, y: it.y, t: 0 }); }
+          updateHud();
+          continue;
+        }
+        if (it.y - it.r > H) {
+          items.splice(i, 1);
+          if (!it.bomb) { lives--; flash = 1; if (lives <= 0) { updateHud(); gameOver(); return; } updateHud(); }
+        }
+      }
+      // twinkle
+      for (const s of stars) { s.tw += dt * 2; }
+      for (let i = pop.length - 1; i >= 0; i--) { pop[i].t += dt * 3; if (pop[i].t >= 1) pop.splice(i, 1); }
+      if (flash > 0) flash = Math.max(0, flash - dt * 2.5);
+    }
+
+    let flash = 0;
+    const pop = [];
+
+    function drawStar(x, y, r, rot, fill) {
+      ctx.save();
+      ctx.translate(x, y); ctx.rotate(rot);
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const a = (i * 2 * Math.PI) / 5 - Math.PI / 2;
+        ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        const a2 = a + Math.PI / 5;
+        ctx.lineTo(Math.cos(a2) * r * 0.45, Math.sin(a2) * r * 0.45);
+      }
+      ctx.closePath();
+      ctx.fillStyle = fill; ctx.fill();
+      ctx.restore();
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, W, H);
+
+      // background stars
+      for (const s of stars) {
+        const a = 0.35 + Math.sin(s.tw) * 0.3;
+        ctx.globalAlpha = Math.max(0.05, a);
+        ctx.fillStyle = '#aab6ff';
+        ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      // falling items
+      for (const it of items) {
+        if (it.bomb) {
+          ctx.beginPath();
+          ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
+          ctx.fillStyle = '#ff4d6d'; ctx.fill();
+          ctx.strokeStyle = '#2a0410'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(it.x, it.y - it.r); ctx.lineTo(it.x, it.y - it.r - 6);
+          ctx.stroke();
+        } else {
+          ctx.shadowColor = 'rgba(255,215,106,.8)'; ctx.shadowBlur = 12;
+          drawStar(it.x, it.y, it.r, it.spin, '#ffd76a');
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      // catch pops
+      for (const p of pop) {
+        ctx.globalAlpha = 1 - p.t;
+        drawStar(p.x, p.y - p.t * 22, 8 + p.t * 8, p.t * 3, '#fff2bd');
+      }
+      ctx.globalAlpha = 1;
+
+      // basket
+      if (basket) {
+        const bx = basket.x - basket.w / 2, by = basket.y - basket.h / 2;
+        const grd = ctx.createLinearGradient(0, by, 0, by + basket.h);
+        grd.addColorStop(0, '#8ea0ff'); grd.addColorStop(1, '#4b57e0');
+        ctx.fillStyle = grd;
+        roundRect(bx, by, basket.w, basket.h, 8); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.25)';
+        roundRect(bx + 4, by + 3, basket.w - 8, 4, 3); ctx.fill();
+      }
+
+      // damage flash
+      if (flash > 0) {
+        ctx.fillStyle = `rgba(255,60,90,${flash * 0.35})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    document.getElementById('startBtn').addEventListener('click', start);
+    document.getElementById('againBtn').addEventListener('click', start);
+
+    // initial idle background
+    resize();
+    stars = Array.from({ length: 60 }, () => ({
+      x: Math.random() * W, y: Math.random() * H,
+      r: Math.random() * 1.4 + 0.3, tw: Math.random() * Math.PI * 2
+    }));
+    (function idle(now) {
+      if (!running) {
+        for (const s of stars) s.tw += 0.02;
+        render();
+        requestAnimationFrame(idle);
+      }
+    })();
+  })();
+  </script>
+</body>
+</html>
