@@ -1,0 +1,29 @@
+{
+  "name": "Star Catch",
+  "store": {
+    "tagline": "Slide the basket, catch the falling stars, dodge the bombs — and survive as the sky speeds up.",
+    "price": 0,
+    "category": "Arcade",
+    "tags": ["arcade", "reflex", "casual", "high-score"],
+    "how_it_plays": "Golden stars and red bombs rain from the top of the screen. Move your basket to catch every star (+1) while dodging the bombs — and don't let a star hit the floor. You start with three hearts; catch a bomb or miss a star and you lose one. The stars fall faster and thicker the longer you last, so it's you against your own best score.",
+    "works_for": ["Any browser", "Windows & Mac", "100% offline", "Keyboard, mouse or touch"],
+    "features": [
+      { "title": "One-more-go arcade loop", "body": "A tight catch-and-dodge game that ramps up until it beats you — then dares you to try again." },
+      { "title": "Play it your way", "body": "Arrow keys, A / D, mouse-drag or touch all steer the basket." },
+      { "title": "Rising difficulty", "body": "Stars fall faster and bombs get more common the longer you survive." },
+      { "title": "Beat your best", "body": "Your top score is saved locally and shown right in the HUD." }
+    ],
+    "includes": [
+      "Windows installer (.exe)",
+      "Mac installer (.dmg)",
+      "YouTeacher Activator — one app licenses every game on your USB",
+      "Fully offline single-file arcade game"
+    ],
+    "setup": [
+      { "title": "Install & activate", "body": "Run the installer and license it with your USB via the YouTeacher Activator." },
+      { "title": "Press Play", "body": "Hit Play and start catching stars — no account, no internet needed." },
+      { "title": "Chase the high score", "body": "Survive the speed-up and push your best score higher each run." }
+    ],
+    "gallery": ["frontend/icon.png"]
+  }
+}
